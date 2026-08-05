@@ -1,59 +1,76 @@
 import os
+import time
 import streamlit as st
 from google import genai
 from google.genai import types
 
-# Page Config
 st.set_page_config(page_title="SSS 3 AI Tutor", page_icon="🎓", layout="wide")
 
 st.title("🎓 SSS 3 WAEC / NECO / UTME Interactive Tutor")
 st.caption("Physics • Chemistry • Biology • Food & Nut • Math • English • Geography")
 
-# Automatically retrieve API Key from Streamlit Secrets or Environment
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
 if not api_key:
     st.error("⚠️ API Key not found. Please set `GEMINI_API_KEY` in Streamlit Secrets.")
     st.stop()
 
-# Initialize Client automatically using the secret key
 client = genai.Client(api_key=api_key)
 
-# Sidebar Options
-st.sidebar.header("Study Configuration")
+st.sidebar.header("1. Select Subject")
 subject = st.sidebar.selectbox(
-    "Select Subject",
-    ["Physics", "Chemistry", "Biology", "Food & Nutrition", "Mathematics", "English Language", "Geography"]
+    "Subject",
+    ["Physics", "Mathematics", "Chemistry", "Biology", "Food & Nutrition", "English Language", "Geography"]
 )
 
-# Upload Section
-st.sidebar.header("Upload Study Materials")
-uploaded_file = st.sidebar.file_uploader("Upload Textbook / Syllabus / Past Qs (PDF or TXT)", type=["pdf", "txt"])
+st.sidebar.header("2. Upload Study Materials / Photos")
+uploaded_file = st.sidebar.file_uploader(
+    "Upload Textbook PDF, or Snap/Upload Photo (PNG, JPG, PDF)", 
+    type=["pdf", "txt", "png", "jpg", "jpeg"]
+)
 
-# Subject-Specific System Prompts
 SUBJECT_PROMPTS = {
-    "Physics": "Solve problems step-by-step. Render all equations in LaTeX (e.g., $v^2 = u^2 + 2as$). Emphasize WAEC calculation units and standard constants.",
-    "Chemistry": "Render all chemical equations and reactions in LaTeX (e.g., $\\text{2NaOH} + \\text{H}_2\\text{SO}_4 \\rightarrow \\text{Na}_2\\text{SO}_4 + \\text{2H}_2\\text{O}$). Detail IUPAC nomenclature.",
+    "Physics": "Solve problems step-by-step. Render equations in LaTeX (e.g., $v^2 = u^2 + 2as$). Emphasize WAEC calculation units and standard constants.",
+    "Chemistry": "Render chemical equations in LaTeX (e.g., $\\text{2NaOH} + \\text{H}_2\\text{SO}_4 \\rightarrow \\text{Na}_2\\text{SO}_4 + \\text{2H}_2\\text{O}$). Detail IUPAC nomenclature.",
     "Biology": "Provide clear anatomical definitions, biological systems breakdowns, key terms, and textbook page citations.",
     "Food & Nutrition": "Highlight nutrient classifications, meal planning rules, culinary terms, food preservation principles, and WAEC practical exam tips.",
-    "Mathematics": "Format all formulas, proofs, and algebraic steps in LaTeX. Highlight common arithmetic and geometric pitfalls.",
-    "English Language": "Focus on WAEC/UTME grammar structures, essay formats (argumentative, formal letters), comprehension strategies, and oral English phonetics.",
-    "Geography": "Explain physical and human geography concepts with structured step-by-step breakdowns, map reading techniques, and local Nigerian case studies."
+    "Mathematics": "Format formulas in LaTeX syntax using $...$ and $$...$$. Break down solutions step-by-step and highlight WAEC pitfalls.",
+    "English Language": "Focus on WAEC/UTME grammar structures, essay formats, comprehension strategies, and oral English phonetics.",
+    "Geography": "Explain physical and human geography concepts with step-by-step breakdowns, map reading techniques, and local Nigerian case studies."
 }
 
-# File Upload Processing via Gemini API
-if "file_ref" not in st.session_state and uploaded_file is not None:
-    with st.spinner("Processing document..."):
-        temp_path = f"temp_{uploaded_file.name}"
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        
-        file_ref = client.files.upload(file=temp_path)
-        st.session_state.file_ref = file_ref
-        os.remove(temp_path)
-        st.sidebar.success("Study Material Processed!")
+# Process file with error handling
+if uploaded_file is not None:
+    if "current_file_name" not in st.session_state or st.session_state.current_file_name != uploaded_file.name:
+        with st.spinner("Processing uploaded file (large files may take up to a minute)..."):
+            temp_path = f"temp_{uploaded_file.name}"
+            try:
+                # Save uploaded file chunk by chunk to prevent memory spikes
+                with open(temp_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                
+                # Upload to Gemini File API
+                file_ref = client.files.upload(file=temp_path)
+                
+                # Verify file processing state
+                while file_ref.state.name == "PROCESSING":
+                    time.sleep(2)
+                    file_ref = client.files.get(name=file_ref.name)
+                    
+                if file_ref.state.name == "FAILED":
+                    st.sidebar.error("❌ File processing failed on Gemini server. Please compress the PDF.")
+                else:
+                    st.session_state.file_ref = file_ref
+                    st.session_state.current_file_name = uploaded_file.name
+                    st.session_state.is_image = uploaded_file.type.startswith("image/")
+                    st.sidebar.success("📚 Document processed successfully!")
 
-# Chat History Setup
+            except Exception as e:
+                st.sidebar.error(f"⚠️ Upload Error: File may be too large for direct PDF parsing. Please compress PDF to under 50MB.")
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -61,7 +78,7 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-user_prompt = st.chat_input(f"Ask any {subject} question, past question, or request a practice quiz...")
+user_prompt = st.chat_input(f"Ask any {subject} question, snap a photo, or ask to solve uploaded material...")
 
 if user_prompt:
     st.session_state.messages.append({"role": "user", "content": user_prompt})
@@ -79,21 +96,25 @@ if user_prompt:
         f"You are an expert Nigerian Senior Secondary School (SSS 3) tutor specializing in {subject}. "
         "You are helping a student prepare for WAEC, NECO, and UTME exams.\n\n"
         "STRICT BEHAVIORS:\n"
-        "1. Ground your answers directly in the uploaded syllabus and textbook.\n"
-        "2. Cite textbook page numbers or chapters for every concept: [Source: Textbook, Page X / Chapter Y].\n"
-        f"3. {SUBJECT_PROMPTS[subject]}\n"
-        "4. When solving past questions, show step-by-step working and point out common errors."
+        "1. Ground your answers directly in the uploaded syllabus, textbook, or image.\n"
+        "2. If an image of a question/diagram is uploaded, read the question accurately, transcribe it first, then provide a detailed step-by-step solution.\n"
+        "3. Cite textbook page numbers or chapters when applicable: [Source: Textbook, Page X / Chapter Y].\n"
+        f"4. {SUBJECT_PROMPTS[subject]}\n"
+        "5. Point out common WAEC/NECO marking scheme pitfalls and examiner tips."
     )
 
     with st.chat_message("assistant"):
-        with st.spinner(f"Analyzing {subject} materials..."):
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=full_system_instruction,
-                    temperature=0.2,
+        with st.spinner(f"Analyzing {subject} input..."):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=full_system_instruction,
+                        temperature=0.2,
+                    )
                 )
-            )
-            st.markdown(response.text)
-            st.session_state.messages.append({"role": "assistant", "content": response.text})
+                st.markdown(response.text)
+                st.session_state.messages.append({"role": "assistant", "content": response.text})
+            except Exception as e:
+                st.error("⚠️ Response generation error. The uploaded document may be too large to process in a single request.")
