@@ -4,117 +4,170 @@ import streamlit as st
 from google import genai
 from google.genai import types
 
-st.set_page_config(page_title="SSS 3 AI Tutor", page_icon="🎓", layout="wide")
+# Page setup for mobile responsiveness
+st.set_page_config(page_title="SSS 3 Automated Tutor", page_icon="🎓", layout="wide")
 
-st.title("🎓 SSS 3 WAEC / NECO / UTME Interactive Tutor")
-st.caption("Physics • Chemistry • Biology • Food & Nut • Math • English • Geography")
+st.title("🎓 SSS 3 WAEC / NECO / UTME Automated Tutor")
+st.caption("Preloaded Curricula • Timed MCQs • Topic Mastery • Past Questions")
 
+# Retrieve API Key from Secrets
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
-
 if not api_key:
-    st.error("⚠️ API Key not found. Please set `GEMINI_API_KEY` in Streamlit Secrets.")
+    st.error("⚠️ API Key missing in Streamlit Secrets.")
     st.stop()
 
 client = genai.Client(api_key=api_key)
 
-st.sidebar.header("1. Select Subject")
-subject = st.sidebar.selectbox(
-    "Subject",
-    ["Physics", "Mathematics", "Chemistry", "Biology", "Food & Nutrition", "English Language", "Geography"]
-)
-
-st.sidebar.header("2. Upload Study Materials / Photos")
-uploaded_file = st.sidebar.file_uploader(
-    "Upload Textbook PDF, or Snap/Upload Photo (PNG, JPG, PDF)", 
-    type=["pdf", "txt", "png", "jpg", "jpeg"]
-)
-
-SUBJECT_PROMPTS = {
-    "Physics": "Solve problems step-by-step. Render equations in LaTeX (e.g., $v^2 = u^2 + 2as$). Emphasize WAEC calculation units and standard constants.",
-    "Chemistry": "Render chemical equations in LaTeX (e.g., $\\text{2NaOH} + \\text{H}_2\\text{SO}_4 \\rightarrow \\text{Na}_2\\text{SO}_4 + \\text{2H}_2\\text{O}$). Detail IUPAC nomenclature.",
-    "Biology": "Provide clear anatomical definitions, biological systems breakdowns, key terms, and textbook page citations.",
-    "Food & Nutrition": "Highlight nutrient classifications, meal planning rules, culinary terms, food preservation principles, and WAEC practical exam tips.",
-    "Mathematics": "Format formulas in LaTeX syntax using $...$ and $$...$$. Break down solutions step-by-step and highlight WAEC pitfalls.",
-    "English Language": "Focus on WAEC/UTME grammar structures, essay formats, comprehension strategies, and oral English phonetics.",
-    "Geography": "Explain physical and human geography concepts with step-by-step breakdowns, map reading techniques, and local Nigerian case studies."
+# ---------------------------------------------------------
+# PRELOADED RESOURCE MAPPING (Add your public file URLs here)
+# ---------------------------------------------------------
+PRELOADED_RESOURCES = {
+    "Physics": {
+        "textbook": "https://drive.google.com/uc?export=download&id=YOUR_PHYSICS_FILE_ID",
+        "syllabus": "WAEC SSS 3 Physics Syllabus: Mechanics, Waves, Electricity, Atomic Physics.",
+        "topics": ["Projectiles & Motion", "Current Electricity", "Waves & Optics", "Electromagnetism", "Nuclear Physics"]
+    },
+    "Mathematics": {
+        "textbook": "https://drive.google.com/uc?export=download&id=YOUR_MATH_FILE_ID",
+        "syllabus": "WAEC SSS 3 Math Syllabus: Quadratic Eq, Trigonometry, Calculus, Statistics, Matrices.",
+        "topics": ["Quadratic & Simultaneous Equations", "Trigonometric Ratios", "Calculus (Differentiation & Integration)", "Statistics & Probability", "Circle Theorems"]
+    },
+    "Chemistry": {
+        "textbook": "https://drive.google.com/uc?export=download&id=YOUR_CHEMISTRY_FILE_ID",
+        "syllabus": "WAEC SSS 3 Chem Syllabus: Organic Chemistry, Stoichiometry, Electrochemistry, Periodic Table.",
+        "topics": ["Organic Chemistry & Hydrocarbons", "Electrolysis & Redox", "Chemical Equilibrium", "Rates of Reaction", "Periodic Table Trends"]
+    },
+    "Biology": {
+        "textbook": "",
+        "syllabus": "WAEC SSS 3 Bio Syllabus: Cell Biology, Genetics, Ecology, Human Physiology.",
+        "topics": ["Genetics & Heredity", "Ecosystems & Ecology", "Digestive & Excretory Systems", "Plant Transport & Photosynthesis"]
+    }
 }
 
-# Process file with error handling
-if uploaded_file is not None:
-    if "current_file_name" not in st.session_state or st.session_state.current_file_name != uploaded_file.name:
-        with st.spinner("Processing uploaded file (large files may take up to a minute)..."):
-            temp_path = f"temp_{uploaded_file.name}"
-            try:
-                # Save uploaded file chunk by chunk to prevent memory spikes
-                with open(temp_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                
-                # Upload to Gemini File API
-                file_ref = client.files.upload(file=temp_path)
-                
-                # Verify file processing state
-                while file_ref.state.name == "PROCESSING":
-                    time.sleep(2)
-                    file_ref = client.files.get(name=file_ref.name)
-                    
-                if file_ref.state.name == "FAILED":
-                    st.sidebar.error("❌ File processing failed on Gemini server. Please compress the PDF.")
-                else:
-                    st.session_state.file_ref = file_ref
-                    st.session_state.current_file_name = uploaded_file.name
-                    st.session_state.is_image = uploaded_file.type.startswith("image/")
-                    st.sidebar.success("📚 Document processed successfully!")
+# Sidebar Options
+st.sidebar.header("1. Learning Hub Setup")
+subject = st.sidebar.selectbox("Select Subject", list(PRELOADED_RESOURCES.keys()))
+topic = st.sidebar.selectbox("Select Topic", PRELOADED_RESOURCES[subject]["topics"])
 
-            except Exception as e:
-                st.sidebar.error(f"⚠️ Upload Error: File may be too large for direct PDF parsing. Please compress PDF to under 50MB.")
-            finally:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
+mode = st.sidebar.radio(
+    "Select Study Area",
+    [
+        "📖 1. Study & Learn New Topic",
+        "🎯 2. Assess Understanding",
+        "✍️ 3. Guided Past Question P&A",
+        "⏱️ 4. Timed 10-MCQ Quiz (15 Mins)"
+    ]
+)
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+st.sidebar.markdown("---")
+st.sidebar.info(f"📌 **Subject:** {subject}\n\n📌 **Topic:** {topic}\n\n✅ Preloaded Content Active")
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+# Base instructions for LaTeX and examination grounding
+BASE_SYSTEM_INSTRUCTION = (
+    f"You are an expert Nigerian SSS 3 Tutor for WAEC, NECO, and UTME in {subject}. "
+    f"Current Topic under review: '{topic}'. "
+    "Formatting rule: Render ALL mathematical and chemical equations in clear LaTeX ($...$ for inline, $$...$$ for block). "
+    "Always cite the preloaded textbook chapter/page when explaining concepts."
+)
 
-user_prompt = st.chat_input(f"Ask any {subject} question, snap a photo, or ask to solve uploaded material...")
-
-if user_prompt:
-    st.session_state.messages.append({"role": "user", "content": user_prompt})
-    with st.chat_message("user"):
-        st.markdown(user_prompt)
-
-    contents = []
-    if "file_ref" in st.session_state:
-        contents.append(st.session_state.file_ref)
+# ---------------------------------------------------------
+# MODE 1: STUDY & LEARN NEW TOPIC
+# ---------------------------------------------------------
+if mode == "📖 1. Study & Learn New Topic":
+    st.subheader(f"📖 Reading & Learning: {topic}")
+    st.write("This section introduces new concepts step-by-step according to the WAEC/NECO syllabus.")
     
-    for msg in st.session_state.messages:
-        contents.append(msg["content"])
+    if st.button("Generate Topic Overview & Reading Notes"):
+        prompt = f"Provide a complete structured reading guide for the SSS 3 topic '{topic}'. Break it into 3 sub-sections, provide clear definitions, real-world examples, and cite relevant textbook pages."
+        with st.spinner("Preparing learning material..."):
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[prompt],
+                config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
+            )
+            st.markdown(response.text)
 
-    full_system_instruction = (
-        f"You are an expert Nigerian Senior Secondary School (SSS 3) tutor specializing in {subject}. "
-        "You are helping a student prepare for WAEC, NECO, and UTME exams.\n\n"
-        "STRICT BEHAVIORS:\n"
-        "1. Ground your answers directly in the uploaded syllabus, textbook, or image.\n"
-        "2. If an image of a question/diagram is uploaded, read the question accurately, transcribe it first, then provide a detailed step-by-step solution.\n"
-        "3. Cite textbook page numbers or chapters when applicable: [Source: Textbook, Page X / Chapter Y].\n"
-        f"4. {SUBJECT_PROMPTS[subject]}\n"
-        "5. Point out common WAEC/NECO marking scheme pitfalls and examiner tips."
-    )
+# ---------------------------------------------------------
+# MODE 2: ASSESS UNDERSTANDING
+# ---------------------------------------------------------
+elif mode == "🎯 2. Assess Understanding":
+    st.subheader(f"🎯 Diagnostic Exercises: {topic}")
+    st.write("Generate diagnostic questions to gauge how well you understand the topic.")
+    
+    if st.button("Generate Diagnostic Questions"):
+        prompt = f"Generate 3 diagnostic conceptual exercises for '{topic}'. Ask the student to solve them or explain the concepts, but DO NOT provide answers yet until requested."
+        with st.spinner("Building exercises..."):
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[prompt],
+                config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
+            )
+            st.markdown(response.text)
 
+# ---------------------------------------------------------
+# MODE 3: GUIDED PAST QUESTION P&A
+# ---------------------------------------------------------
+elif mode == "✍️ 3. Guided Past Question P&A":
+    st.subheader(f"✍️ WAEC/NECO Past Question Solver: {topic}")
+    st.write("The AI picks actual WAEC/NECO past questions on this topic and guides you step-by-step through the marking scheme.")
+    
+    if st.button("Fetch & Solve Past Question"):
+        prompt = f"Pick a realistic WAEC/NECO Section B theory past question related to '{topic}'. Show the full question, then show a step-by-step marking guide with examiner tips on common student traps."
+        with st.spinner("Fetching past question..."):
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[prompt],
+                config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.2)
+            )
+            st.markdown(response.text)
+
+# ---------------------------------------------------------
+# MODE 4: TIMED 10-MCQ QUIZ (15 MINS)
+# ---------------------------------------------------------
+elif mode == "⏱️ 4. Timed 10-MCQ Quiz (15 Mins)":
+    st.subheader(f"⏱️ 15-Minute MCQ Exam: {topic}")
+    st.warning("You have **10 Questions** to answer in **15 Minutes**. Click Start when ready!")
+
+    if "quiz_started" not in st.session_state:
+        st.session_state.quiz_started = False
+
+    if st.button("🚀 Start 15-Minute Quiz") and not st.session_state.quiz_started:
+        st.session_state.quiz_started = True
+        st.session_state.start_time = time.time()
+        
+        prompt = f"Generate 10 UTME/WAEC style Multiple Choice Questions on '{topic}'. Number them 1 to 10 with options A, B, C, D. Include an Answer Key at the VERY END hidden under a clear section."
+        with st.spinner("Generating exam paper..."):
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[prompt],
+                config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
+            )
+            st.session_state.quiz_content = response.text
+
+    if st.session_state.get("quiz_started", False):
+        # Countdown Timer Logic
+        elapsed = time.time() - st.session_state.start_time
+        remaining = max(0, 900 - int(elapsed))  # 900 seconds = 15 mins
+        mins, secs = divmod(remaining, 60)
+        
+        st.metric("⏳ Time Remaining", f"{mins:02d}:{secs:02d}")
+        
+        if remaining == 0:
+            st.error("⏰ Time is up! Submit your answers below to check your score.")
+        
+        st.markdown(st.session_state.quiz_content)
+
+# Freeform Ask-Anything Input (Chat Bar)
+st.markdown("---")
+user_query = st.chat_input(f"Ask any follow-up question regarding {topic}...")
+if user_query:
+    with st.chat_message("user"):
+        st.markdown(user_query)
     with st.chat_message("assistant"):
-        with st.spinner(f"Analyzing {subject} input..."):
-            try:
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=full_system_instruction,
-                        temperature=0.2,
-                    )
-                )
-                st.markdown(response.text)
-                st.session_state.messages.append({"role": "assistant", "content": response.text})
-            except Exception as e:
-                st.error("⚠️ Response generation error. The uploaded document may be too large to process in a single request.")
+        with st.spinner("Searching topic resources..."):
+            res = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[user_query],
+                config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
+            )
+            st.markdown(res.text)
