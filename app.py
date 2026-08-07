@@ -55,20 +55,43 @@ mode = st.sidebar.radio(
     ]
 )
 
-# Cache PDF download & Gemini upload per server session
-@st.cache_resource(show_spinner=f"Loading permanent {subject} textbook resources...")
+def get_direct_gdrive_url(url):
+    """Appends confirm parameter to bypass Google Drive virus scan warning on large files."""
+    if not url:
+        return None
+    if "confirm=t" not in url:
+        if "?" in url:
+            return f"{url}&confirm=t"
+        else:
+            return f"{url}?confirm=t"
+    return url
+
+# Cache PDF download & Gemini upload (ttl=86400 refreshes automatically every 24h)
+@st.cache_resource(ttl=86400, show_spinner="Loading permanent textbook resources...")
 def load_permanent_textbook(subj_name, download_url):
     if not download_url:
         return None
     
     local_filename = f"temp_{subj_name}.pdf"
+    direct_url = get_direct_gdrive_url(download_url)
     
-    # Download from Google Drive if not local
-    response = requests.get(download_url, allow_redirects=True)
+    # Download file using requests session to handle redirects and large files
+    session = requests.Session()
+    response = session.get(direct_url, allow_redirects=True, stream=True)
+    
     with open(local_filename, "wb") as f:
-        f.write(response.content)
+        for chunk in response.iter_content(chunk_size=32768):
+            if chunk:
+                f.write(chunk)
     
-    # Upload to Gemini Session
+    # Validate that the downloaded file is a valid PDF (starts with %PDF)
+    with open(local_filename, "rb") as f:
+        header = f.read(4)
+        if header != b"%PDF":
+            os.remove(local_filename)
+            raise ValueError("Downloaded file is not a valid PDF. Verify Google Drive access permissions ('Anyone with link').")
+
+    # Upload file to Gemini Session
     file_ref = client.files.upload(file=local_filename)
     
     while file_ref.state.name == "PROCESSING":
@@ -87,7 +110,7 @@ if pdf_url:
         file_ref = load_permanent_textbook(subject, pdf_url)
         st.sidebar.success(f"✅ {subject} Textbook Loaded permanently!")
     except Exception as e:
-        st.sidebar.warning(f"⚠️ Textbook URL for {subject} not set in Secrets. Operating in base AI mode.")
+        st.sidebar.warning(f"⚠️ Textbook loading note: {e}. Operating in standard AI mode.")
 
 # Base Instructions for Gemini
 BASE_SYSTEM_INSTRUCTION = (
@@ -116,12 +139,16 @@ if mode == "📖 1. Study & Learn New Topic":
     if st.button("Generate Reading Notes"):
         prompt = f"Provide a complete structured reading guide for '{topic}'. Break it into 3 sub-sections with clear definitions, real-world examples, and textbook citations."
         with st.spinner("Generating reading notes from preloaded textbook..."):
-            res = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=get_contents(prompt),
-                config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
-            )
-            st.markdown(res.text)
+            try:
+                res = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=get_contents(prompt),
+                    config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
+                )
+                st.markdown(res.text)
+            except Exception as err:
+                st.error("⚠️ Response generation error. Re-indexing textbook...")
+                st.cache_resource.clear()
 
 # ---------------------------------------------------------
 # MODE 2: ASSESS UNDERSTANDING
@@ -132,12 +159,16 @@ elif mode == "🎯 2. Assess Understanding":
     if st.button("Generate Diagnostic Questions"):
         prompt = f"Generate 3 diagnostic conceptual questions for '{topic}'. Ask the student to solve or explain them. DO NOT show answers until requested."
         with st.spinner("Generating diagnostic exercises..."):
-            res = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=get_contents(prompt),
-                config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
-            )
-            st.markdown(res.text)
+            try:
+                res = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=get_contents(prompt),
+                    config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
+                )
+                st.markdown(res.text)
+            except Exception as err:
+                st.error("⚠️ Response generation error. Clear cache and try again.")
+                st.cache_resource.clear()
 
 # ---------------------------------------------------------
 # MODE 3: GUIDED PAST QUESTION P&A
@@ -148,12 +179,16 @@ elif mode == "✍️ 3. Guided Past Question P&A":
     if st.button("Fetch & Solve Past Question"):
         prompt = f"Pick a realistic WAEC/NECO Section B theory past question on '{topic}'. Provide the full question, then a step-by-step marking scheme answer with examiner tips."
         with st.spinner("Fetching past question..."):
-            res = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=get_contents(prompt),
-                config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.2)
-            )
-            st.markdown(res.text)
+            try:
+                res = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=get_contents(prompt),
+                    config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.2)
+                )
+                st.markdown(res.text)
+            except Exception as err:
+                st.error("⚠️ Response generation error.")
+                st.cache_resource.clear()
 
 # ---------------------------------------------------------
 # MODE 4: TIMED 10-MCQ QUIZ (15 MINS)
@@ -171,12 +206,16 @@ elif mode == "⏱️ 4. Timed 10-MCQ Quiz (15 Mins)":
         
         prompt = f"Generate 10 UTME/WAEC style Multiple Choice Questions on '{topic}'. Number them 1 to 10 with options A, B, C, D. Put the Answer Key at the VERY END hidden under a clear section header."
         with st.spinner("Generating quiz..."):
-            res = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=get_contents(prompt),
-                config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
-            )
-            st.session_state.quiz_content = res.text
+            try:
+                res = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=get_contents(prompt),
+                    config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
+                )
+                st.session_state.quiz_content = res.text
+            except Exception as err:
+                st.error("⚠️ Error generating quiz questions.")
+                st.cache_resource.clear()
 
     if st.session_state.get("quiz_started", False):
         elapsed = time.time() - st.session_state.start_time
@@ -198,9 +237,13 @@ if user_query:
         st.markdown(user_query)
     with st.chat_message("assistant"):
         with st.spinner("Analyzing preloaded materials..."):
-            res = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=get_contents(user_query),
-                config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
-            )
-            st.markdown(res.text)
+            try:
+                res = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=get_contents(user_query),
+                    config=types.GenerateContentConfig(system_instruction=BASE_SYSTEM_INSTRUCTION, temperature=0.3)
+                )
+                st.markdown(res.text)
+            except Exception as err:
+                st.error("⚠️ Query error. Please refresh the page.")
+                st.cache_resource.clear()
